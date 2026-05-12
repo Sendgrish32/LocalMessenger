@@ -4,7 +4,7 @@ from nacl.public import PrivateKey, Box
 my_private_key = PrivateKey.generate()
 my_public_key = my_private_key.public_key
 peers_keys = {}
-server_ip = '192.168.0.1'
+server_ip = '127.0.0.1'
 server_port = '8888'
 
 async def listen_server(reader):
