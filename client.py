@@ -4,8 +4,8 @@ from nacl.public import PrivateKey, Box
 my_private_key = PrivateKey.generate()
 my_public_key = my_private_key.public_key
 peers_keys = {}
-server_ip = 'k2huq8clkg.localto.net'
-server_port = '2791'
+server_ip = '192.168.0.1'
+server_port = '8888'
 
 async def listen_server(reader):
     try:
@@ -15,7 +15,7 @@ async def listen_server(reader):
                 print("\n[Система] Соединение разорвано сервером.")
                 break
             print(f"\n{data.decode().strip()}")
-            print(end="", flush=True) # Возвращаем приглашение ко вводу
+            print(end="", flush=True)
     except Exception as e:
         print(f"\n[Ошибка чтения]: {e}")
 
@@ -24,14 +24,12 @@ async def send_messages(writer):
 
     pub_key_b64 = base64.b64encode(bytes(my_public_key)).decode('utf-8')
     
-    # Отправляем серверу спец-сообщение (протокол)
     writer.write(f"KEY:{pub_key_b64}".encode())
     await writer.drain()
 
     loop = asyncio.get_event_loop()
     try:
         while True:
-            # Читаем ввод пользователя
             message = await loop.run_in_executor(None, input)
             
             if not message:
@@ -53,17 +51,12 @@ async def send_messages(writer):
 
 async def main():
     try:
-        # Подключаемся
         reader, writer = await asyncio.open_connection(server_ip, server_port)
         
-        # Запускаем задачи
         listen_task = asyncio.create_task(listen_server(reader))
         send_task = asyncio.create_task(send_messages(writer))
-
-        # Ждем именно задачу отправки. Пока ты не введешь Stop, клиент не умрет.
-        await send_task
         
-        # Отменяем прослушку после выхода из отправки
+        await send_task
         listen_task.cancel()
         
     except Exception as e:
