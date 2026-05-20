@@ -1,7 +1,8 @@
 import asyncio, json, hashlib, os
 
 #IP адрес сервера: Для только своего пк(127.0.0.1), для всех(0.0.0.0)
-ip_addr = '127.0.0.1'
+ip_addr = '0.0.0.0'
+msg_size = 150 * 1024 * 1024
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "users.json")
@@ -28,32 +29,39 @@ async def handle_client(reader, writer):
     nickname = None
     
     try:
-        data = await reader.read(1024)
+        data = await reader.read(msg_size)
         content = data.decode().strip()
+        
+        if "<<END_MSG>>" in content:
+            content = content.replace("<<END_MSG>>", "").strip()
 
-        writer.write("Введите ваш никнейм: ".encode())
+        writer.write("Введите ваш никнейм: <<END_MSG>>".encode())
         await writer.drain()
-        nickname = (await reader.read(1024)).decode().strip()
+        
+        raw_nickname = (await reader.read(msg_size)).decode().strip()
+        nickname = raw_nickname.replace("<<END_MSG>>", "").strip()
 
-        writer.write("Введите пароль: ".encode())
+        writer.write("Введите пароль: <<END_MSG>>".encode())
         await writer.drain()
-        password = (await reader.read(1024)).decode().strip()
+        
+        raw_password = (await reader.read(msg_size)).decode().strip()
+        password = raw_password.replace("<<END_MSG>>", "").strip()
         password_hash = get_hash(password)
 
         if nickname in users_db:
             if users_db[nickname]["password_hash"] != password_hash:
-                writer.write("ОШИБКА: Неверный пароль".encode())
+                writer.write("ОШИБКА: Неверный пароль<<END_MSG>>".encode())
                 await writer.drain()
                 writer.close()
                 return
-            writer.write(f"С возвращением, {nickname}!\n".encode())
+            writer.write(f"С возвращением, {nickname}!\n<<END_MSG>>".encode())
         else:
             users_db[nickname] = {"password_hash": password_hash}
-            save_db() #Saving user data
-            writer.write(f"Регистрация успешна! Добро пожаловать, {nickname}.\n".encode())
+            save_db()
+            writer.write(f"Регистрация успешна! Добро пожаловать, {nickname}.\n<<END_MSG>>".encode())
         await writer.drain()
 
-        if content.startswith("KEY:"):
+        if "KEY:" in content:
             key_b64 = content.split("KEY:")[1]
             users_db[nickname]["public_key"] = key_b64
             save_db()
@@ -62,31 +70,52 @@ async def handle_client(reader, writer):
         active_users[nickname] = writer
         print(f"[СЕРВЕР] {nickname} ({addr}) вошел в чат.")
         
-        msg = f"[СИСТЕМА] {nickname} присоединился к чату."
+        msg = f"[СИСТЕМА] {nickname} присоединился к чату.<<END_MSG>>"
         for user, w in active_users.items():
             if user != nickname:
                 w.write(msg.encode())
                 await w.drain()
 
+        server_buffer = ""
+        CHUNK_SIZE = 32 * 1024
+
         while True:
-            data = await reader.read(1024)
+            data = await reader.read(64 * 1024)
             if not data:
                 break
+            server_buffer += data.decode('utf-8', errors='ignore')
             
-            message = data.decode().strip()
-            if message.lower() == 'stop':
-                break
+            while "<<END_MSG>>" in server_buffer:
+                message, server_buffer = server_buffer.split("<<END_MSG>>", 1)
+                message = message.strip()
+                
+                if message.lower() == 'stop':
+                    break
 
-            print(f"[{nickname}]: {message}")
+                if "FILE_MSG:" in message:
+                    print(f"[{nickname}]: Отправил файл (Размер: {len(message)} символов)")
+                else:
+                    print(f"[{nickname}]: {message}")
+                
+                final_msg = f"[{nickname}]: {message}<<END_MSG>>"
+                encoded_msg = final_msg.encode('utf-8')
+                total_size = len(encoded_msg)
 
-            final_msg = f"[{nickname}]: {message}"
-            for user, w in list(active_users.items()):
-                if user != nickname:
-                    try:
-                        w.write(f"{final_msg}".encode())
-                        await w.drain()
-                    except:
-                        del active_users[user]
+                for user, w in list(active_users.items()):
+                    if user != nickname:
+                        try:
+                            offset = 0
+                            while offset < total_size:
+                                chunk = encoded_msg[offset:offset + CHUNK_SIZE]
+                                w.write(chunk)
+                                await w.drain()
+                                offset += len(chunk)
+                        except Exception as send_err:
+                            print(f"[ОШИБКА СЕТИ] Не удалось отправить пользователю {user}: {send_err}")
+                            try:
+                                del active_users[user]
+                            except:
+                                pass
 
     except Exception as e:
         print(f"[ОШИБКА] Проблема с {addr}: {e}")
